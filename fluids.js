@@ -51,14 +51,24 @@ class Particle {
      * local density/velocity profiles
      */
     draw(context){
-        context.save();
+        /*context.save();
             context.translate(this.x, this.y);
             
             context.beginPath();
-            context.arc(0,0,10,0,2*Math.PI);
+            context.arc(0,0,20,0,2*Math.PI);
             context.fillStyle = '#0099aa';
             context.fill();
-        context.restore();
+        context.restore();*/
+        // Create a radial gradient for the blur effect
+        var gradient = context.createRadialGradient(1000, 1000, 1000, 1000, 100, 1000);
+        gradient.addColorStop(0, 'rgba(100, 200, 250, 0.9)');
+        gradient.addColorStop(1, 'rgba(100, 200, 250, 0.9)');
+
+        // Fill a circle with the gradient
+        context.fillStyle = gradient;
+        context.beginPath();
+        context.arc(this.x, this.y, 20, 0, Math.PI * 2);
+        context.fill();
     }
 
 }
@@ -102,8 +112,8 @@ class Simulator {
         let mass = document.getElementById("mass").value;
 
         //Initiate the hashmap. We are assuming grid size to be one pixel but this can be tuned later
-        for(let i = 1; i <= 39; i++){
-            for(let j = 1; j < 25; j++){
+        for(let i = 1; i <= 100; i++){
+            for(let j = 1; j < 30; j++){
                 let particle = new Particle(10*j+100,10*i,0,0,d0,mass);
                 let c = [particle.x , particle.y];
                 let coords = c.join(",");
@@ -281,8 +291,8 @@ class Simulator {
             let divU = this.calculateDivU(p);
             
             //console.log(gradD[0] + "," + gradD[1]);
-            p.ux += (-1.5*(Math.pow(this.c,2)/p.d)*gradD[0] + this.g[0])*delT;
-            p.uy += (-1*(Math.pow(this.c,2)/p.d)*gradD[1] + this.g[1])*delT;
+            p.ux += ((-1.0*(Math.pow(this.c,2)/p.d)*gradD[0] + this.g[0])*delT)%10;
+            p.uy += ((-1.0*(Math.pow(this.c,2)/p.d)*gradD[1] + this.g[1])*delT)%20;
 
             p.d  = p.d * (divU) *delT + 5;
             //console.log(p.d);
@@ -291,7 +301,7 @@ class Simulator {
             p.y += this.stepfn(p.y, 480)*p.uy*delT;
             if(p.y  >= 400 + 50 || p.y + delT*p.uy <= 10){
                 //console.log(p.y);
-                p.uy = -0.6*p.uy;
+                p.uy = -0.5*p.uy;
             }
             if(p.x + delT*p.ux >= canvas.width + 20 || p.x + delT* p.ux <= 10){
                 p.ux *= -0.5;
@@ -343,10 +353,11 @@ class Simulator {
 let canvas =/**  @type {HTMLCanvasElement} */ (document.getElementById("canvas"));
 let context = canvas.getContext("2d");
 
-let sim = new Simulator(100,3.2,canvas);
+let sim = new Simulator(100,3.5,canvas);
 sim.initSim();
 //sim.simulation(0.1);
 function draw(){
+    
     context.clearRect(0, 0, canvas.width, canvas.height);
     //sim.lattice.forEach(p => console.log(p.ux+","+p.uy));
     sim.lattice.forEach(p => p.draw(context));
