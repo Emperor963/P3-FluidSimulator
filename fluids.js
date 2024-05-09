@@ -55,7 +55,7 @@ class Particle {
             context.translate(this.x, this.y);
             
             context.beginPath();
-            context.arc(0,0,5,0,2*Math.PI);
+            context.arc(0,0,10,0,2*Math.PI);
             context.fillStyle = '#0099aa';
             context.fill();
         context.restore();
@@ -80,13 +80,15 @@ class Simulator {
      * @param {number} gx : value of acceleration due to gravity
      * @param {number} gy :value of acceleration due to gravity in y direction
      */
-    constructor(N, h, gx, gy, canvas){
+    constructor(N, h,canvas){
         this.N = N;
         this.particles = Array(N);
         this.h = h;
-        this.g = [gx, gy];
+        this.gx =Number(document.getElementById("gx").value);
+        this.gy = Number(document.getElementById("gy").value);
+        this.g = [gx.value, gy.value];
         this.lattice = new Map();
-        this.c = 5;
+        this.c = document.getElementById("c").value;
         this.canvas = canvas;
     }
     /**
@@ -96,13 +98,13 @@ class Simulator {
 
         let length = Math.floor(Math.sqrt(this.N));
         let width = Math.floor(this.N/length);
-        let d0 = 1000;
-        let mass = 0.1;
+        let d0 = 10;
+        let mass = document.getElementById("mass").value;
 
         //Initiate the hashmap. We are assuming grid size to be one pixel but this can be tuned later
-        for(let i = 1; i <= 25; i++){
+        for(let i = 1; i <= 39; i++){
             for(let j = 1; j < 25; j++){
-                let particle = new Particle(10*j,10*i,0,0,d0,mass);
+                let particle = new Particle(10*j+100,10*i,0,0,d0,mass);
                 let c = [particle.x , particle.y];
                 let coords = c.join(",");
                 this.lattice.set(coords,particle);
@@ -277,22 +279,24 @@ class Simulator {
         this.particles.forEach(p => {
             let gradD = this.calculateGradD(p);
             let divU = this.calculateDivU(p);
-            //console.log(divU);
+            
             //console.log(gradD[0] + "," + gradD[1]);
-            p.ux += (-1*(Math.pow(this.c,2)/p.d)*gradD[0] + this.g[0])*delT;
+            p.ux += (-1.5*(Math.pow(this.c,2)/p.d)*gradD[0] + this.g[0])*delT;
             p.uy += (-1*(Math.pow(this.c,2)/p.d)*gradD[1] + this.g[1])*delT;
 
-            p.d  = p.d * (divU)*delT + 5;
+            p.d  = p.d * (divU) *delT + 5;
             //console.log(p.d);
 
             p.x += p.ux*delT;
-            p.y += p.uy*delT;
+            p.y += this.stepfn(p.y, 480)*p.uy*delT;
             if(p.y  >= 400 + 50 || p.y + delT*p.uy <= 10){
+                //console.log(p.y);
                 p.uy = -0.6*p.uy;
             }
             if(p.x + delT*p.ux >= canvas.width + 20 || p.x + delT* p.ux <= 10){
                 p.ux *= -0.5;
             }
+            
         })
 
         this.updateMap();
@@ -325,6 +329,12 @@ class Simulator {
         else if(iter - 4 === 0) return 0;
         else if(iter - 4 < 0) return -1;
     }
+
+    stepfn(t,x){
+        if(x > t) return 1;
+
+        if(x < t) return 0;
+    }
 }
 
 
@@ -333,7 +343,7 @@ class Simulator {
 let canvas =/**  @type {HTMLCanvasElement} */ (document.getElementById("canvas"));
 let context = canvas.getContext("2d");
 
-let sim = new Simulator(100,3,0,5,canvas);
+let sim = new Simulator(100,3.2,canvas);
 sim.initSim();
 //sim.simulation(0.1);
 function draw(){
