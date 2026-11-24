@@ -67,7 +67,7 @@ class Particle {
         // Fill a circle with the gradient
         context.fillStyle = gradient;
         context.beginPath();
-        context.arc(this.x, this.y, 20, 0, Math.PI * 2);
+        context.arc(this.x, this.y, 10, 0, Math.PI * 2);
         context.fill();
     }
 
@@ -97,8 +97,11 @@ class Simulator {
         this.gx =Number(document.getElementById("gx").value);
         this.gy = Number(document.getElementById("gy").value);
         this.g = [gx.value, gy.value];
+        this.particleSpacing = 10;
+        this.cellSize = h;
         this.lattice = new Map();
-        this.c = document.getElementById("c").value;
+        this.c = 20;
+        document.getElementById("c").value = String(this.c);
         this.canvas = canvas;
     }
     /**
@@ -108,19 +111,26 @@ class Simulator {
 
         let length = Math.floor(Math.sqrt(this.N));
         let width = Math.floor(this.N/length);
-        let d0 = 10;
-        let mass = document.getElementById("mass").value;
+        let d0 = 0;
+        const massValue = Number(document.getElementById("mass").value);
+        const reach = Math.ceil(this.h / this.particleSpacing);
+        for(let row = -reach; row <= reach; row++){
+            for(let column = -reach; column <= reach; column++){
+                d0 += massValue * this.kernel(
+                    Math.hypot(column, row)*this.particleSpacing, 2);
+            }
+        }
+        this.restDensity = d0;
+        let mass = massValue;
 
-        //Initiate the hashmap. We are assuming grid size to be one pixel but this can be tuned later
-        for(let i = 1; i <= 100; i++){
+        // Initialize particles and index their centers by cell.
+        for(let i = 1; i <= 50; i++){
             for(let j = 1; j < 30; j++){
-                let particle = new Particle(10*j+100,10*i,0,0,d0,mass);
-                let c = [particle.x , particle.y];
-                let coords = c.join(",");
-                this.lattice.set(coords,particle);
+                let particle = new Particle(10*j+250,10*i,0,0,d0,mass);
                 this.particles.push(particle);
             }
         }
+        this.updateMap();
 
     }
 
@@ -146,7 +156,8 @@ class Simulator {
 
             //POLY6 KERNEL
             case 2:
-                let normalp6 = 315/(64*Math.PI*Math.pow(h,9));
+                if(r >= h) return 0;
+                let normalp6 = 4/(Math.PI*Math.pow(h,8));
                 let distp6 = Math.pow(h,2) - Math.pow(r,2);
 
                 return normalp6 * Math.pow(distp6, 3);
@@ -187,7 +198,8 @@ class Simulator {
             
             //POLY6 KERNEL
             case 2:
-                let normalp6 = 315/(64*Math.PI*Math.pow(h,9));
+                if(r >= h) return 0;
+                let normalp6 = 4/(Math.PI*Math.pow(h,8));
                 let distp6 = Math.pow(h,2) - Math.pow(r,2);
 
                 return -6*normalp6*r*Math.pow(distp6,2);
@@ -203,98 +215,64 @@ class Simulator {
     }
 
 
-    /**
-     * Base formula: grad(A_i) = d_i * Sum_j [m_j * (A_i/d_i^2 + A_j/d_j^2) * grad(kernel)]; 
-     * returns a 2-vector containing the X and Y components of the gradient of rho.
-     * @param {Particle} particle : particle where gradrho needs to be calculated
-     */
-    calculateGradD(particle){
-        let kernel = 2; //Poly6 kernel
-        let unitdist = 10;
-
-        let gradX = 0;
-        let gradY = 0;
-
-        let delK_Sides = this.kernelGradient(unitdist, kernel);
-        let delK_Corners = this.kernelGradient(Math.sqrt(2)*unitdist, kernel);
-        let theta = 0;
-
-        for(let i = 0; i < 8; i++){
-            let delK = delK_Corners;
-            let nbrM = 0;
-            let nbrD = particle.d;
-            let c = [particle.x + unitdist*this.cwSteppper(i), particle.y+unitdist*this.cwSteppper(i-2)];
-            let coords = c.join(",");
-            let nbr = this.lattice.get(coords);
-            if(i%2 == 0) delK = delK_Sides
-            //console.log(nbr);
-            if(nbr != null){
-                //console.log("Neighbor ain't null");
-                nbrM = nbr.mass;
-                nbrD = nbr.d;
+    // Each particle queries its own fixed 3-by-3 local stencil.
+    *localNeighbors(particle){
+        const column = Math.floor(particle.x / this.cellSize);
+        const row = Math.floor(particle.y / this.cellSize);
+        for(let offsetY = -1; offsetY <= 1; offsetY++){
+            for(let offsetX = -1; offsetX <= 1; offsetX++){
+                const neighbors = this.lattice.get(`${column + offsetX},${row + offsetY}`);
+                if(neighbors === undefined) continue;
+                for(const neighbor of neighbors){
+                    if(neighbor !== particle) yield neighbor;
+                }
             }
-            gradY += particle.d * (nbrM * delK * (1/nbrD + 1/particle.d)) * Math.cos(theta);
-            gradX += particle.d * (nbrM * delK * (1/nbrD + 1/particle.d)) * Math.sin(theta);
-
-            theta += Math.PI / 4;
         }
-        return [gradX, gradY];
     }
 
-    /**
-     * Calculates the divergence of u at a specific point. Formula for divergence is as follows:
-     * div(A) = Sum_j [m_j/d_j * dot(A_j, grad(kernel))];
-     * @param {Particle} particle 
-     */
+    calculatePressureAcceleration(particle){
+        let ax = 0;
+        let ay = 0;
+        const pressure = this.c*this.c * Math.max(0, particle.d - this.restDensity);
+        for(const neighbor of this.localNeighbors(particle)){
+            const dx = particle.x - neighbor.x;
+            const dy = particle.y - neighbor.y;
+            const distance = Math.hypot(dx, dy);
+            if(distance === 0 || distance >= this.h) continue;
+            const neighborPressure = this.c*this.c * Math.max(0, neighbor.d - this.restDensity);
+            const strength = -neighbor.mass * (
+                pressure/(particle.d*particle.d) +
+                neighborPressure/(neighbor.d*neighbor.d)
+            ) * this.kernelGradient(distance, 2);
+            ax += strength * dx/distance;
+            ay += strength * dy/distance;
+        }
+        return [ax, ay];
+    }
+
     calculateDivU(particle){
-        let kernel = 2 //Poly6 kernel
-        let unitdist = 10;
-
-        let div = 0;
-
-        let delK_Sides = this.kernelGradient(unitdist, kernel);
-        let delK_Corners = this.kernelGradient(Math.sqrt(2)*unitdist, kernel);
-        let theta = 0;
-
-        for(let i = 0; i < 8; i++){
-            let delK = delK_Corners;
-            let nbrM = 1;
-            let nbrD = particle.d;
-            let nbrUx = 0;
-            let nbrUy = 0;
-            let c = [particle.x + unitdist*this.cwSteppper(i), particle.y + unitdist*this.cwSteppper(i-2)];
-            let coords = c.join(",");
-            let nbr = this.lattice.get(coords);
-            if(nbr != null){
-                //console.log("neighbor is not null")
-                nbrM = nbr.mass;
-                nbrD = nbr.d;
-                nbrUx = nbr.ux;
-                nbrUy = nbr.uy;
-            }
-            if(i%2 === 0) delK = delK_Sides;
-
-            //console.log(nbrM/nbrD);
-            div += (nbrM/nbrD) * (nbrUx * Math.sin(theta) + nbrUy * Math.cos(theta)) * delK;
-
-            theta += Math.PI/4;
+        let divergence = 0;
+        for(const neighbor of this.localNeighbors(particle)){
+            const dx = particle.x - neighbor.x;
+            const dy = particle.y - neighbor.y;
+            const distance = Math.hypot(dx, dy);
+            if(distance === 0 || distance >= this.h) continue;
+            divergence += (neighbor.mass/neighbor.d) * this.kernelGradient(distance, 2) *
+                ((neighbor.ux - particle.ux)*dx + (neighbor.uy - particle.uy)*dy)/distance;
         }
-
-        return div;
-
+        return divergence;
     }
-
     simulation(delT){
         
         this.particles.forEach(p => {
-            let gradD = this.calculateGradD(p);
+            let acceleration = this.calculatePressureAcceleration(p);
             let divU = this.calculateDivU(p);
             
             //console.log(gradD[0] + "," + gradD[1]);
-            p.ux += ((-1.0*(Math.pow(this.c,2)/p.d)*gradD[0] + this.g[0])*delT)%10;
-            p.uy += ((-1.0*(Math.pow(this.c,2)/p.d)*gradD[1] + this.g[1])*delT)%20;
+            p.ux += (acceleration[0] + Number(this.g[0]))*delT;
+            p.uy += (acceleration[1] + Number(this.g[1]))*delT;
 
-            p.d  = p.d * (divU) *delT + 5;
+            p.d  -= p.d * (divU) *delT;
             //console.log(p.d);
 
             p.x += p.ux*delT;
@@ -312,27 +290,33 @@ class Simulator {
         this.updateMap();
     }
 
-
-    updateMap(){
-        
-        let newLattice = new Map();
-        this.lattice.forEach((value, key) =>{
-            let x = value.x;
-            let y = value.y;
-            let c = [x,y];
-            let coords = c.join(",");
-            newLattice.set(coords, value);
-        })
-
-        this.lattice = newLattice;
+    latticeKey(x, y){
+        const column = Math.floor(x / this.cellSize);
+        const row = Math.floor(y / this.cellSize);
+        return `${column},${row}`;
     }
 
+    updateMap(){
+        // Reuse cell arrays and rebuild membership from all particles.
+        for(const particles of this.lattice.values()){
+            particles.length = 0;
+        }
+        this.particles.forEach(particle => {
+            const key = this.latticeKey(particle.x, particle.y);
+            let particles = this.lattice.get(key);
+            if(particles === undefined){
+                particles = [];
+                this.lattice.set(key, particles);
+            }
+            particles.push(particle);
+        });
+    }
     /**
      * Custom step function for clockwise iteration over neighbors
      * @param {Number} iter 
      */
     cwSteppper(iter){
-        if(iter < 0) iter = 7 + iter;
+        iter = ((iter % 8) + 8) % 8;
 
         if(iter === 0) return 0;
         else if(iter  - 4 > 0) return 1;
@@ -353,14 +337,14 @@ class Simulator {
 let canvas =/**  @type {HTMLCanvasElement} */ (document.getElementById("canvas"));
 let context = canvas.getContext("2d");
 
-let sim = new Simulator(100,3.5,canvas);
+let sim = new Simulator(100,20,canvas);
 sim.initSim();
 //sim.simulation(0.1);
 function draw(){
     
     context.clearRect(0, 0, canvas.width, canvas.height);
     //sim.lattice.forEach(p => console.log(p.ux+","+p.uy));
-    sim.lattice.forEach(p => p.draw(context));
+    sim.particles.forEach(p => p.draw(context));
     console.log("FRAME OVER");
 }
 function loop(timestamp){
