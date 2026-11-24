@@ -5,7 +5,7 @@
 
 
 //Particle class
-class Particle {
+export class Particle {
     /**
      * Constructor method for a particle.
      * @param {number} x   - x coordinate of position
@@ -43,96 +43,41 @@ class Particle {
         }
     }
 
-    /**
-     * Draws the particle
-     * @param {CanvasRenderingContext2D} context 
-     * 
-     * TODO: Add functionality for changing color based on 
-     * local density/velocity profiles
-     */
-    draw(context){
-        /*context.save();
-            context.translate(this.x, this.y);
-            
-            context.beginPath();
-            context.arc(0,0,20,0,2*Math.PI);
-            context.fillStyle = '#0099aa';
-            context.fill();
-        context.restore();*/
-        const speed = Math.hypot(this.ux, this.uy);
-        const fraction = Math.min(speed / 20, 1);
-        const hue = 210 * (1 - fraction);
-        context.fillStyle = `hsl(${hue}, 90%, 60%)`;
-        context.beginPath();
-        context.arc(this.x, this.y, 10, 0, Math.PI * 2);
-        context.fill();
-    }
-
 }
-
 
 /**
  * Object oriented design of the simulator. This class should contain all relevant code pertaining to
  * Smoothening of microscopic variables, calculating gradients, time step solution to the modified NSE
  * Pseudo Collision Operator, etc.
  */
-class Simulator {
+export class Simulator {
 
-    /**
-     * Constructor method for the simulator
-     * @param {number} N : number of particles in the simulation
-     * Note: This number can not be changed once simulation is created!
-     * Recommended value of N for fast perfomance : ####
-     * @param {number} h : Kernel distance for smoothening
-     * @param {number} gx : value of acceleration due to gravity
-     * @param {number} gy :value of acceleration due to gravity in y direction
-     */
-    constructor(N, h,canvas){
-        this.N = N;
-        this.particles = Array(N);
-        this.h = h;
-        this.gx =Number(document.getElementById("gx").value);
-        this.gy = Number(document.getElementById("gy").value);
-        this.g = [gx.value, gy.value];
-        this.particleSpacing = 10;
-        this.cellSize = h;
-        this.lattice = new Map();
-        this.viscosity = 0.1; // Experimental neighbor velocity damping.
-        this.c = 20;
-        document.getElementById("c").value = String(this.c);
+    /** Construct a solver from numeric parameters supplied by its caller. */
+    constructor(canvas, options){
         this.canvas = canvas;
+        this.h = options.h;
+        this.cellSize = options.h;
+        this.g = [...options.gravity];
+        this.c = options.speedOfSound;
+        this.viscosity = options.viscosity;
+        this.densityFloorFraction = options.densityFloorFraction;
+        this.boundaryMargin = options.boundaryMargin;
+        this.particles = [];
+        this.lattice = new Map();
         this.metrics = { mapMs: 0, neighborVisits: 0, maxCellOccupancy: 0, occupiedCells: 0 };
     }
-    /**
-     * Initialize the map and draw it on the canvas
-     */
-    initSim(){
 
-        let length = Math.floor(Math.sqrt(this.N));
-        let width = Math.floor(this.N/length);
-        let d0 = 0;
-        const massValue = Number(document.getElementById("mass").value);
-        const reach = Math.ceil(this.h / this.particleSpacing);
-        for(let row = -reach; row <= reach; row++){
-            for(let column = -reach; column <= reach; column++){
-                d0 += massValue * this.kernel(
-                    Math.hypot(column, row)*this.particleSpacing, 2);
-            }
+    /** Install an initial state prepared by the caller. */
+    initSim(particles, restDensity){
+        if(!Number.isFinite(restDensity) || restDensity <= 0){
+            throw new RangeError("Reference density must be positive and finite.");
         }
-        this.restDensity = d0;
-        let mass = massValue;
-
-        // Initialize particles and index their centers by cell.
-        for(let i = 1; i <= 70; i++){
-            for(let j = 1; j < 30; j++){
-                let particle = new Particle(10*j+550,10*i,0,0,d0,mass);
-                this.particles.push(particle);
-            }
-        }
+        this.particles = particles;
+        this.N = particles.length;
+        this.restDensity = restDensity;
+        this.lattice.clear();
         this.updateMap();
-
     }
-
     /**
      * 
      * @param {number} qi     : coordinate value q of the ith particle
@@ -278,7 +223,7 @@ class Simulator {
             p.ux += (ax + Number(this.g[0]))*delT;
             p.uy += (ay + Number(this.g[1]))*delT;
 
-            const minimumDensity = this.restDensity * 0.01;
+            const minimumDensity = this.restDensity * this.densityFloorFraction;
             const nextDensity = p.d * (1 - divU * delT);
             if (!Number.isFinite(nextDensity)) {
                 throw new Error("Non-finite density during simulation");
@@ -291,8 +236,8 @@ class Simulator {
                 throw new Error("Non-finite position or velocity during simulation");
             }
 
-            [p.x, p.ux] = this.reflectBoundary(p.x, p.ux, 10, this.canvas.width - 10);
-            [p.y, p.uy] = this.reflectBoundary(p.y, p.uy, 10, this.canvas.height - 10);
+            [p.x, p.ux] = this.reflectBoundary(p.x, p.ux, this.boundaryMargin, this.canvas.width - this.boundaryMargin);
+            [p.y, p.uy] = this.reflectBoundary(p.y, p.uy, this.boundaryMargin, this.canvas.height - this.boundaryMargin);
         })
 
         const mapStart = performance.now();
@@ -357,140 +302,3 @@ class Simulator {
 }
 
 
-//THIS CODE GOES AT THE VERY BOTTOM
-
-let canvas =/**  @type {HTMLCanvasElement} */ (document.getElementById("canvas"));
-let context = canvas.getContext("2d");
-
-let sim = new Simulator(100,20,canvas);
-sim.initSim();
-
-let previousPointer = null;
-
-function canvasPoint(event) {
-    const bounds = canvas.getBoundingClientRect();
-    const scaleX = bounds.width / canvas.offsetWidth;
-    const scaleY = bounds.height / canvas.offsetHeight;
-
-    return {
-        x: (event.clientX - bounds.left - canvas.clientLeft * scaleX) *
-            canvas.width / (canvas.clientWidth * scaleX),
-        y: (event.clientY - bounds.top - canvas.clientTop * scaleY) *
-            canvas.height / (canvas.clientHeight * scaleY)
-    };
-}
-
-canvas.style.touchAction = "none";
-
-canvas.addEventListener("pointerdown", event => {
-    if (!event.isPrimary || event.button !== 0) return;
-
-    previousPointer = {
-        ...canvasPoint(event),
-        id: event.pointerId
-    };
-    canvas.setPointerCapture(event.pointerId);
-});
-
-canvas.addEventListener("pointermove", event => {
-    if (!previousPointer || event.pointerId !== previousPointer.id) return;
-
-    const point = canvasPoint(event);
-    const dx = point.x - previousPointer.x;
-    const dy = point.y - previousPointer.y;
-    const radius = 80;
-    const strength = 0.3;
-
-    sim.particles.forEach(particle => {
-        const distance = Math.hypot(
-            particle.x - point.x,
-            particle.y - point.y
-        );
-        if (distance >= radius) return;
-
-        const weight = 1 - distance / radius;
-        particle.ux += dx * strength * weight;
-        particle.uy += dy * strength * weight;
-    });
-
-    previousPointer = { ...point, id: event.pointerId };
-});
-
-function stopStirring(event) {
-    if (previousPointer?.id === event.pointerId) {
-        previousPointer = null;
-    }
-}
-
-canvas.addEventListener("pointerup", stopStirring);
-canvas.addEventListener("pointercancel", stopStirring);
-canvas.addEventListener("lostpointercapture", stopStirring);
-
-//sim.simulation(0.1);
-function draw(){
-    
-    context.clearRect(0, 0, canvas.width, canvas.height);
-    //sim.lattice.forEach(p => console.log(p.ux+","+p.uy));
-    sim.particles.forEach(p => p.draw(context));
-
-}
-// Aggregate measurements to avoid logging on every animation frame.
-const profile = {
-    reportStart: performance.now(),
-    previousTimestamp: undefined,
-    frames: 0,
-    totals: {},
-    maximums: {},
-    counts: {}
-};
-
-function recordMeasurement(name, value){
-    profile.totals[name] = (profile.totals[name] || 0) + value;
-    profile.maximums[name] = Math.max(profile.maximums[name] || 0, value);
-    profile.counts[name] = (profile.counts[name] || 0) + 1;
-}
-
-function loop(timestamp){
-    const start = performance.now();
-    sim.simulation(0.1);
-    const afterSimulation = performance.now();
-    draw();
-    const afterDraw = performance.now();
-
-    recordMeasurement("Physics (ms)", afterSimulation - start - sim.metrics.mapMs);
-    recordMeasurement("Map rebuild (ms)", sim.metrics.mapMs);
-    recordMeasurement("Drawing calls (ms)", afterDraw - afterSimulation);
-    recordMeasurement("Neighbor visits per step", sim.metrics.neighborVisits);
-    recordMeasurement("Maximum cell occupancy", sim.metrics.maxCellOccupancy);
-    recordMeasurement("Occupied cells", sim.metrics.occupiedCells);
-    recordMeasurement("Retained map entries", sim.lattice.size);
-    if(profile.previousTimestamp !== undefined){
-        recordMeasurement("Frame interval (ms)", timestamp - profile.previousTimestamp);
-    }
-    profile.previousTimestamp = timestamp;
-    profile.frames++;
-
-    if(afterDraw - profile.reportStart >= 1000){
-        const rows = {};
-        for(const name of Object.keys(profile.totals)){
-            rows[name] = {
-                average: Number((profile.totals[name] / profile.counts[name]).toFixed(3)),
-                maximum: Number(profile.maximums[name].toFixed(3))
-            };
-        }
-        console.log("Fluid profile", {
-            elapsedSeconds: Number((afterDraw / 1000).toFixed(1)),
-            framesPerSecond: Number((profile.frames * 1000 /
-                (afterDraw - profile.reportStart)).toFixed(1))
-        });
-        console.table(rows);
-        profile.reportStart = afterDraw;
-        profile.frames = 0;
-        profile.totals = {};
-        profile.maximums = {};
-        profile.counts = {};
-    }
-    window.requestAnimationFrame(loop);
-}
-
-window.requestAnimationFrame(loop);

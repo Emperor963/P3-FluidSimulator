@@ -25,9 +25,11 @@ The animation starts automatically. Keep the server running, save edits, and ref
 
 | File | Responsibility |
 | --- | --- |
-| `fluids.html` | Canvas, initial control values, and module entry point |
-| `fluids.js` | Particle state, spatial indexing, physics, rendering, and profiling |
-| `libs/custom.css` | Responsive canvas and control layout |
+| `fluids.html` | Page structure and experiment module entry point |
+| `fluids.js` | Exported particle and solver classes, spatial indexing, physics, and solver metrics |
+| `experiments.js` | Parameters, centered initialization, initial vortex, rendering, stirring, animation, and profiling reports |
+| `experimental-fluid.js` | Compatibility entry point importing `experiments.js` |
+| `libs/custom.css` | Full-viewport canvas layout with scrolling disabled |
 | `libs/runCanvas.js` | Reusable animation-control helper from the course library, currently unused by this simulator |
 
 ## Particle state and units
@@ -43,21 +45,21 @@ Each `Particle` stores the following quantities.
 
 Canvas coordinates increase to the right and downward, so positive `gy` accelerates particles toward the bottom of the screen. Lengths use pixels and time uses simulation units. Parameters currently form an experimental numerical model without a calibration to SI material properties.
 
-Particles are rendered as circles of radius 5, colored by speed. This visual radius is independent of the interaction radius. Neighbor selection uses particle centers.
+Particles are rendered as circles of radius 3, colored by speed. This visual radius is independent of the interaction radius. Neighbor selection uses particle centers.
 
 ## Speed-based coloring
 
-`Particle.draw()` maps the magnitude of velocity to an HSL hue,
+`draw()` in `experiments.js` maps the magnitude of velocity to an HSL hue,
 
 $$
 v_i = \sqrt{u_{x,i}^2 + u_{y,i}^2},
 \qquad
-H_i = 210\left(1-\min\left(\frac{v_i}{20},1\right)\right).
+H_i = 210\left(1-\min\left(\frac{v_i}{30},1\right)\right).
 $$
 
-Stationary particles appear blue. Increasing speed moves the color through cyan, green, and yellow toward red. Speeds of 20 or higher share the red endpoint. Coloring helps reveal currents, agitation, and the effect of damping. It represents speed rather than density or pressure.
+Stationary particles appear blue. Increasing speed moves the color through cyan, green, and yellow toward red. Speeds of 30 or higher share the red endpoint. Coloring helps reveal currents, agitation, and the effect of damping. It represents speed rather than density or pressure.
 
-To change the color scale, edit the divisor `20` in `Particle.draw()`. A larger value spreads the color transition over a wider speed range. Saturation is 90% and lightness is 60%.
+Change `experiment.rendering.speedScale` to adjust the speed represented by red. A larger value spreads the transition over a wider speed range. `rendering.radius` sets visual size, `slowHue` sets the low-speed hue, and `saturation` and `lightness` set color intensity and brightness. Current values are 3, 210, 90%, and 60%, respectively.
 
 ## Interactive stirring
 
@@ -75,7 +77,7 @@ Particles outside that radius receive no contribution. The effect fades linearly
 
 `canvasPoint()` converts browser pointer coordinates into canvas coordinates, accounting for CSS scaling and the canvas border. Pointer capture keeps the drag active when the pointer leaves the canvas. Pointer release, cancellation, or loss of capture clears the stored drag state. Touch scrolling is disabled over the canvas so dragging can stir the fluid.
 
-Tune `radius = 80` and `strength = 0.3` in the `pointermove` handler in `fluids.js`. Increasing the radius affects a larger region. Increasing strength transfers more velocity for the same pointer displacement. The handler scans the particle array for each pointer-move event.
+Tune `experiment.stirring.radius` and `experiment.stirring.strength` in `experiments.js`, currently 80 and 0.3. Increasing the radius affects a larger region. Increasing strength transfers more velocity for the same pointer displacement. The handler scans the particle array for each pointer-move event.
 
 This feature replaces the earlier outward click impulse. It applies user-controlled external momentum through pointer displacement, with no time normalization or swept-path interpolation. Rapid dragging can leave gaps between affected regions, and the result can vary with pointer-event frequency.
 
@@ -124,7 +126,7 @@ $$
 
 `calculateLocalDerivatives()` uses this final expression directly. The factor of distance cancels analytically, allowing the loop to use squared distances throughout and avoid square roots.
 
-`initSim()` estimates a reference density $\rho_0$ by summing mass-weighted kernel values over a regular lattice with spacing 10,
+`initializeExperiment()` estimates a reference density $\rho_0$ by summing mass-weighted kernel values over a regular lattice with spacing 10,
 
 $$
 \rho_0=m\sum_{a,b\in\mathbb{Z}}
@@ -169,9 +171,9 @@ $$
 w_{ij}=\left(1-\frac{r_{ij}^2}{h^2}\right)^2.
 $$
 
-The coefficient `this.viscosity` defaults to $\eta=0.1$. Setting it to zero disables this contribution. Equal velocities contribute zero damping. Positive weights exchange velocity between neighbors and oppose relative motion.
+The coefficient `experiment.viscosity` is currently $\eta=0.1$. Setting it to zero disables this contribution. Equal velocities contribute zero damping. Positive weights exchange velocity between neighbors and oppose relative motion.
 
-This is an experimental smoothing rule. Its strength increases with neighbor count, and its coefficient has no current calibration to physical dynamic or kinematic viscosity. It also damps rigid rotation. For equal masses, symmetric pair contributions conserve linear momentum at the acceleration level. Explicit integration and the velocity-increment wrapping described below affect the resulting dynamics.
+This is an experimental smoothing rule. Its strength increases with neighbor count, and its coefficient has no current calibration to physical dynamic or kinematic viscosity. It also damps rigid rotation. For equal masses, symmetric pair contributions conserve linear momentum at the acceleration level. Explicit integration and neighbor occupancy affect the resulting dynamics.
 
 ## Density evolution
 
@@ -203,14 +205,14 @@ Each animation callback advances one step with $\Delta t=0.1$ and draws the resu
 5. Rebuild spatial membership and update profiling counters.
 6. Clear the canvas and render the particles.
 
-The current velocity updates contain JavaScript remainder operations,
+Velocity is advanced using the combined pressure, damping, and gravity acceleration,
 
 ```js
 p.ux += (ax + Number(this.g[0])) * delT;
 p.uy += (ay + Number(this.g[1])) * delT;
 ```
 
-These wrap each acceleration increment with remainder 10. They can produce discontinuities and do not impose a maximum accumulated speed. They are part of the current implementation and affect the interpretation of its physical behavior.
+All derivatives are evaluated before any particle state is updated, so each step uses a shared state for its interaction calculations.
 
 Position integration uses the updated velocity,
 
@@ -229,30 +231,70 @@ For example, crossing the right wall reverses `ux` and preserves `uy`. This is a
 
 Non-finite position or velocity raises an error before reflection. These checks stop the animation callback through an exception, leaving an error in the browser console.
 
-## Current setup and controls
+## Experiment configuration
 
-| Setting | Current implementation |
-| --- | --- |
-| Canvas coordinate dimensions | 1400 × 680 |
-| Initial particles | 70 rows × 29 columns = 2,030 |
-| Initial centers | $x=560\ldots840$, $y=10\ldots700$, in increments of 10 |
-| Mass | HTML startup value `0.2` |
-| Kernel support and cell width | 20 |
-| Reference spacing | 10 |
-| Speed-of-sound parameter | 20, assigned by the constructor |
-| Experimental viscosity | 0.1 |
-| Gravity | HTML startup values `gx = 0`, `gy = 1` |
-| Step per animation frame | 0.1 |
+All adjustable settings are in the exported `experiment` object at the top of `experiments.js`. Edit the values, save the file, and reload the page. The canvas fills the available viewport beneath the title, with page scrolling disabled. Its display scales to the window while simulation coordinates use `experiment.canvas.width` and `height`.
 
-CSS can scale the displayed canvas to fit the page. Its coordinate dimensions still determine simulation bounds.
+| Setting | Current value | Effect |
+| --- | --- | --- |
+| `N` | 7,500 | Exact number of particles to create |
+| `columns` | 125 | Maximum particles across each row |
+| `spacing` | 10 | Initial center-to-center distance and reference-density lattice spacing |
+| `h` | 20 | Kernel support radius and spatial cell width |
+| `mass` | 0.2 | Mass assigned to each particle |
+| `gravity` | `[0, 0]` | Horizontal and vertical acceleration |
+| `speedOfSound` | 20 | Pressure stiffness through its squared value |
+| `viscosity` | 0.1 | Neighbor velocity-damping strength |
+| `timeStep` | 0.1 | Simulation time advanced per animation frame |
+| `densityFloorFraction` | 0.01 | Minimum density as a fraction of reference density |
+| `boundaryMargin` | 10 | Distance between the reflecting walls and canvas edges |
+| `canvas` | `{ width: 1400, height: 680 }` | Simulation coordinate dimensions |
+| `vortex` | `{ sigma: 120, angularSpeed: 0.2 }` | Spread and strength of the initial rotation |
+| `stirring` | `{ radius: 80, strength: 0.3 }` | Drag interaction size and strength |
+| `rendering` | `{ radius: 3, speedScale: 30, slowHue: 210, saturation: 90, lightness: 60 }` | Particle appearance and speed coloring |
+| `profiling` | `{ enabled: false, reportIntervalMs: 1000 }` | Console report visibility and interval |
 
-The current initialization extends below the canvas. Those particles are folded inside by the first boundary update. The `N=100` constructor argument creates empty array slots, but the hard-coded initialization loops determine the actual population. Array iteration skips those initial empty slots. Changing `N` alone therefore does not change the number of particles.
+### Centered particle initialization
 
-The mass and gravity controls are sampled during startup. Changing them after startup has no live effect. For a different initial value, edit the HTML and reload. The constructor overrides the speed slider to 20. Change `this.c` in the constructor to alter that setting. The viscosity coefficient is also set in the constructor.
+A single particle-creation loop generates exactly `N` particles. Rows are derived from the requested count and column count,
+
+$$
+\text{rows}=\left\lceil\frac{N}{\text{columns}}\right\rceil.
+$$
+
+For counts smaller than `columns`, initialization uses only the required columns. The vertical extent is centered in the canvas, and each row is centered horizontally, including a partially filled final row. With the current configuration, 125 columns and 60 rows occupy centers from $x=80$ to $1320$ and $y=45$ to $635$.
+
+Initialization rejects layouts that exceed the available area inside the boundary margins. Reducing `spacing` produces a tighter block and changes the reference density. Increasing it spreads the same particles across a larger area. `N = 0` creates an empty state.
+
+`fluids.js` receives its numeric parameters through `new Simulator(canvas, experiment)`. `initializeExperiment()` prepares the particles and reference density, then passes them to `sim.initSim(particles, restDensity)`.
+
+### Gaussian-envelope initial rotation
+
+The initial vortex is centered at the canvas midpoint. With displacement $(d_x,d_y)$ from that point, the initial velocity is
+
+$$
+E=\exp\left(-\frac{d_x^2+d_y^2}{2\sigma^2}\right),
+\qquad
+u_x=-\omega d_y E,
+\qquad
+u_y=\omega d_x E.
+$$
+
+Here $\sigma$ is `vortex.sigma` and $\omega$ is `vortex.angularSpeed`. The symbols $u_x$ and $u_y$ denote velocity components. Positive angular speed produces clockwise rotation in downward-positive canvas coordinates. A negative value reverses it. Setting angular speed to zero gives zero initial velocity. Larger sigma spreads rotation over a wider region.
+
+This field is applied once during initialization. Pressure, damping, gravity, stirring, and boundaries subsequently evolve the velocities.
+
+### Density floor
+
+`densityFloorFraction` sets the minimum allowed density relative to the calibrated reference density. At 0.01, the lower bound is $0.01\rho_0$. This protects divisions by density. Raising the fraction increases the lower bound. Frequent activation means the safeguard is materially influencing the density evolution.
 
 ## Performance profiling
 
-Open **Developer Tools → Console** to inspect a `Fluid profile` report approximately once per second. Reports contain averages and maximums over the reporting interval.
+Set `experiment.profiling.enabled = true`, reload, and open the browser developer tools Console to inspect `Fluid profile` reports. `reportIntervalMs` sets the approximate time between reports. At 1000, reports appear about once per second. Each report contains averages and maximums over its reporting interval.
+
+**Profiling is currently disabled for console reporting only.** With `enabled: false`, timers, per-neighbor counters, occupancy tracking, and metric aggregation still execute. The flag suppresses the console reports but retains instrumentation overhead. A complete instrumentation bypass would require a further code change.
+
+Neighbor counters execute once per candidate visit, potentially hundreds of thousands of times per frame. Timing, aggregation, and console output also add overhead. Use these measurements to identify bottlenecks and interpret measured timings with that cost in mind.
 
 | Metric | Interpretation |
 | --- | --- |
@@ -287,6 +329,6 @@ $$
 +\mathbf{a}_v+\mathbf{g}.
 $$
 
-Moving particles carry advection through their trajectories. The implementation's pressure discretization, density floor, remainder operations, fixed step per frame, and viscosity approximation determine how closely the discrete behavior follows those continuum relations.
+Moving particles carry advection through their trajectories. The implementation's pressure discretization, density floor, fixed step per frame, and viscosity approximation determine how closely the discrete behavior follows those continuum relations.
 
 There is no incompressibility projection, surface tension, or explicit cohesion model. Density can drift from a kernel-summed estimate. Boundary sample deficits and near-overlap behavior also influence the result. Research use would require validation of conservation, symmetry, compressibility, resolution dependence, and benchmark flows alongside runtime measurements.
