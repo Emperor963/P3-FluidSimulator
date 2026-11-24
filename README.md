@@ -38,7 +38,41 @@ Each `Particle` stores the following quantities.
 
 Canvas coordinates increase to the right and downward, so positive `gy` accelerates particles toward the bottom of the screen. Lengths use pixels and time uses simulation units. Parameters currently form an experimental numerical model without a calibration to SI material properties.
 
-Particles are rendered as translucent blue circles of radius 5. This visual radius is independent of the interaction radius. Neighbor selection uses particle centers.
+Particles are rendered as circles of radius 5, colored by speed. This visual radius is independent of the interaction radius. Neighbor selection uses particle centers.
+
+## Speed-based coloring
+
+`Particle.draw()` maps the magnitude of velocity to an HSL hue,
+
+$$
+v_i = \sqrt{u_{x,i}^2 + u_{y,i}^2},
+\qquad
+H_i = 210\left(1-\min\left(\frac{v_i}{20},1\right)\right).
+$$
+
+Stationary particles appear blue. Increasing speed moves the color through cyan, green, and yellow toward red. Speeds of 20 or higher share the red endpoint. Coloring helps reveal currents, agitation, and the effect of damping. It represents speed rather than density or pressure.
+
+To change the color scale, edit the divisor `20` in `Particle.draw()`. A larger value spreads the color transition over a wider speed range. Saturation is 90% and lightness is 60%.
+
+## Interactive stirring
+
+Hold the left mouse button and drag through the fluid to add velocity along the drag direction. Pointer events also support primary touch and pen input. Releasing the pointer ends the interaction. A stationary press applies no impulse.
+
+The interaction affects particles within 80 simulation pixels of each pointer-move location. For pointer displacement $\Delta\mathbf{q}$ and distance $r_i$ from the current pointer location, the handler adds
+
+$$
+\Delta\mathbf{u}_i
+=0.3\left(1-\frac{r_i}{80}\right)\Delta\mathbf{q},
+\qquad 0\le r_i<80.
+$$
+
+Particles outside that radius receive no contribution. The effect fades linearly toward the edge. Density continues to evolve through the solver after the velocity change.
+
+`canvasPoint()` converts browser pointer coordinates into canvas coordinates, accounting for CSS scaling and the canvas border. Pointer capture keeps the drag active when the pointer leaves the canvas. Pointer release, cancellation, or loss of capture clears the stored drag state. Touch scrolling is disabled over the canvas so dragging can stir the fluid.
+
+Tune `radius = 80` and `strength = 0.3` in the `pointermove` handler in `fluids.js`. Increasing the radius affects a larger region. Increasing strength transfers more velocity for the same pointer displacement. The handler scans the particle array for each pointer-move event.
+
+This feature replaces the earlier outward click impulse. It applies user-controlled external momentum through pointer displacement, with no time normalization or swept-path interpolation. Rapid dragging can leave gaps between affected regions, and the result can vary with pointer-event frequency.
 
 ## Local lattice and spatial lookup
 

@@ -59,7 +59,10 @@ class Particle {
             context.fillStyle = '#0099aa';
             context.fill();
         context.restore();*/
-        context.fillStyle = 'rgba(100, 200, 250, 0.9)';
+        const speed = Math.hypot(this.ux, this.uy);
+        const fraction = Math.min(speed / 20, 1);
+        const hue = 210 * (1 - fraction);
+        context.fillStyle = `hsl(${hue}, 90%, 60%)`;
         context.beginPath();
         context.arc(this.x, this.y, 10, 0, Math.PI * 2);
         context.fill();
@@ -361,6 +364,68 @@ let context = canvas.getContext("2d");
 
 let sim = new Simulator(100,20,canvas);
 sim.initSim();
+
+let previousPointer = null;
+
+function canvasPoint(event) {
+    const bounds = canvas.getBoundingClientRect();
+    const scaleX = bounds.width / canvas.offsetWidth;
+    const scaleY = bounds.height / canvas.offsetHeight;
+
+    return {
+        x: (event.clientX - bounds.left - canvas.clientLeft * scaleX) *
+            canvas.width / (canvas.clientWidth * scaleX),
+        y: (event.clientY - bounds.top - canvas.clientTop * scaleY) *
+            canvas.height / (canvas.clientHeight * scaleY)
+    };
+}
+
+canvas.style.touchAction = "none";
+
+canvas.addEventListener("pointerdown", event => {
+    if (!event.isPrimary || event.button !== 0) return;
+
+    previousPointer = {
+        ...canvasPoint(event),
+        id: event.pointerId
+    };
+    canvas.setPointerCapture(event.pointerId);
+});
+
+canvas.addEventListener("pointermove", event => {
+    if (!previousPointer || event.pointerId !== previousPointer.id) return;
+
+    const point = canvasPoint(event);
+    const dx = point.x - previousPointer.x;
+    const dy = point.y - previousPointer.y;
+    const radius = 80;
+    const strength = 0.3;
+
+    sim.particles.forEach(particle => {
+        const distance = Math.hypot(
+            particle.x - point.x,
+            particle.y - point.y
+        );
+        if (distance >= radius) return;
+
+        const weight = 1 - distance / radius;
+        particle.ux += dx * strength * weight;
+        particle.uy += dy * strength * weight;
+    });
+
+    previousPointer = { ...point, id: event.pointerId };
+});
+
+function stopStirring(event) {
+    if (previousPointer?.id === event.pointerId) {
+        previousPointer = null;
+    }
+}
+
+canvas.addEventListener("pointerup", stopStirring);
+canvas.addEventListener("pointercancel", stopStirring);
+canvas.addEventListener("lostpointercapture", stopStirring);
+
 //sim.simulation(0.1);
 function draw(){
     
