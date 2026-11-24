@@ -59,13 +59,7 @@ class Particle {
             context.fillStyle = '#0099aa';
             context.fill();
         context.restore();*/
-        // Create a radial gradient for the blur effect
-        var gradient = context.createRadialGradient(1000, 1000, 1000, 1000, 100, 1000);
-        gradient.addColorStop(0, 'rgba(100, 200, 250, 0.9)');
-        gradient.addColorStop(1, 'rgba(100, 200, 250, 0.9)');
-
-        // Fill a circle with the gradient
-        context.fillStyle = gradient;
+        context.fillStyle = 'rgba(100, 200, 250, 0.9)';
         context.beginPath();
         context.arc(this.x, this.y, 10, 0, Math.PI * 2);
         context.fill();
@@ -100,9 +94,11 @@ class Simulator {
         this.particleSpacing = 10;
         this.cellSize = h;
         this.lattice = new Map();
+        this.viscosity = 0.1; // Experimental neighbor velocity damping.
         this.c = 20;
         document.getElementById("c").value = String(this.c);
         this.canvas = canvas;
+        this.metrics = { mapMs: 0, neighborVisits: 0, maxCellOccupancy: 0, occupiedCells: 0 };
     }
     /**
      * Initialize the map and draw it on the canvas
@@ -124,9 +120,9 @@ class Simulator {
         let mass = massValue;
 
         // Initialize particles and index their centers by cell.
-        for(let i = 1; i <= 50; i++){
+        for(let i = 1; i <= 70; i++){
             for(let j = 1; j < 30; j++){
-                let particle = new Particle(10*j+250,10*i,0,0,d0,mass);
+                let particle = new Particle(10*j+550,10*i,0,0,d0,mass);
                 this.particles.push(particle);
             }
         }
@@ -230,64 +226,75 @@ class Simulator {
         }
     }
 
-    calculatePressureAcceleration(particle){
+    calculateLocalDerivatives(particle){
         let ax = 0;
         let ay = 0;
-        const pressure = this.c*this.c * Math.max(0, particle.d - this.restDensity);
-        for(const neighbor of this.localNeighbors(particle)){
-            const dx = particle.x - neighbor.x;
-            const dy = particle.y - neighbor.y;
-            const distance = Math.hypot(dx, dy);
-            if(distance === 0 || distance >= this.h) continue;
-            const neighborPressure = this.c*this.c * Math.max(0, neighbor.d - this.restDensity);
-            const strength = -neighbor.mass * (
-                pressure/(particle.d*particle.d) +
-                neighborPressure/(neighbor.d*neighbor.d)
-            ) * this.kernelGradient(distance, 2);
-            ax += strength * dx/distance;
-            ay += strength * dy/distance;
-        }
-        return [ax, ay];
-    }
-
-    calculateDivU(particle){
         let divergence = 0;
+        const hSquared = this.h*this.h;
+        const gradientScale = -24/(Math.PI*Math.pow(this.h, 8));
+        const pressure = this.c*this.c*Math.max(0, particle.d - this.restDensity);
+        const pressureWeight = pressure/(particle.d*particle.d);
+
         for(const neighbor of this.localNeighbors(particle)){
+            this.metrics.neighborVisits++;
             const dx = particle.x - neighbor.x;
             const dy = particle.y - neighbor.y;
-            const distance = Math.hypot(dx, dy);
-            if(distance === 0 || distance >= this.h) continue;
-            divergence += (neighbor.mass/neighbor.d) * this.kernelGradient(distance, 2) *
-                ((neighbor.ux - particle.ux)*dx + (neighbor.uy - particle.uy)*dy)/distance;
+            const distanceSquared = dx*dx + dy*dy;
+            if(distanceSquared >= hSquared) continue;
+
+            const weight = (1 - distanceSquared / hSquared) ** 2;
+            const damping = this.viscosity * weight;
+            ax += damping * (neighbor.ux - particle.ux);
+            ay += damping * (neighbor.uy - particle.uy);
+            if(distanceSquared === 0) continue;
+
+            // Poly6's radial derivative divided by distance cancels its r factor.
+            const remaining = hSquared - distanceSquared;
+            const gradientOverDistance = gradientScale*remaining*remaining;
+            const neighborPressure = this.c*this.c*Math.max(0, neighbor.d - this.restDensity);
+            const strength = -neighbor.mass*(
+                pressureWeight + neighborPressure/(neighbor.d*neighbor.d)
+            )*gradientOverDistance;
+            ax += strength*dx;
+            ay += strength*dy;
+            divergence += (neighbor.mass/neighbor.d)*gradientOverDistance*
+                ((neighbor.ux - particle.ux)*dx + (neighbor.uy - particle.uy)*dy);
         }
-        return divergence;
+        return [ax, ay, divergence];
     }
     simulation(delT){
+        this.metrics.neighborVisits = 0;
         
-        this.particles.forEach(p => {
-            let acceleration = this.calculatePressureAcceleration(p);
-            let divU = this.calculateDivU(p);
+        // Evaluate all interactions before changing any particle's state.
+        const derivatives = this.particles.map(p => this.calculateLocalDerivatives(p));
+        this.particles.forEach((p, index) => {
+            const [ax, ay, divU] = derivatives[index];
+
             
             //console.log(gradD[0] + "," + gradD[1]);
-            p.ux += (acceleration[0] + Number(this.g[0]))*delT;
-            p.uy += (acceleration[1] + Number(this.g[1]))*delT;
+            p.ux += (ax + Number(this.g[0]))*delT%10;
+            p.uy += (ay + Number(this.g[1]))*delT%10;
 
-            p.d  -= p.d * (divU) *delT;
-            //console.log(p.d);
+            const minimumDensity = this.restDensity * 0.01;
+            const nextDensity = p.d * (1 - divU * delT);
+            if (!Number.isFinite(nextDensity)) {
+                throw new Error("Non-finite density during simulation");
+            }
+            p.d = Math.max(minimumDensity, nextDensity);
 
-            p.x += p.ux*delT;
-            p.y += this.stepfn(p.y, 480)*p.uy*delT;
-            if(p.y  >= 400 + 50 || p.y + delT*p.uy <= 10){
-                //console.log(p.y);
-                p.uy = -0.5*p.uy;
+            p.x += p.ux * delT;
+            p.y += p.uy * delT;
+            if (![p.x, p.y, p.ux, p.uy].every(Number.isFinite)) {
+                throw new Error("Non-finite position or velocity during simulation");
             }
-            if(p.x + delT*p.ux >= canvas.width + 20 || p.x + delT* p.ux <= 10){
-                p.ux *= -0.5;
-            }
-            
+
+            [p.x, p.ux] = this.reflectBoundary(p.x, p.ux, 10, this.canvas.width - 10);
+            [p.y, p.uy] = this.reflectBoundary(p.y, p.uy, 10, this.canvas.height - 10);
         })
 
+        const mapStart = performance.now();
         this.updateMap();
+        this.metrics.mapMs = performance.now() - mapStart;
     }
 
     latticeKey(x, y){
@@ -301,6 +308,8 @@ class Simulator {
         for(const particles of this.lattice.values()){
             particles.length = 0;
         }
+        this.metrics.maxCellOccupancy = 0;
+        this.metrics.occupiedCells = 0;
         this.particles.forEach(particle => {
             const key = this.latticeKey(particle.x, particle.y);
             let particles = this.lattice.get(key);
@@ -308,7 +317,9 @@ class Simulator {
                 particles = [];
                 this.lattice.set(key, particles);
             }
+            if(particles.length === 0) this.metrics.occupiedCells++;
             particles.push(particle);
+            this.metrics.maxCellOccupancy = Math.max(this.metrics.maxCellOccupancy, particles.length);
         });
     }
     /**
@@ -324,10 +335,21 @@ class Simulator {
         else if(iter - 4 < 0) return -1;
     }
 
-    stepfn(t,x){
-        if(x > t) return 1;
+    reflectBoundary(position, velocity, minimum, maximum){
+        const width = maximum - minimum;
+        const period = 2 * width;
+        const offset = ((position - minimum) % period + period) % period;
 
-        if(x < t) return 0;
+        if (offset === 0) {
+            return [minimum, Math.abs(velocity)];
+        }
+        if (offset === width) {
+            return [maximum, -Math.abs(velocity)];
+        }
+        if (offset < width) {
+            return [minimum + offset, velocity];
+        }
+        return [maximum - (offset - width), -velocity];
     }
 }
 
@@ -345,11 +367,64 @@ function draw(){
     context.clearRect(0, 0, canvas.width, canvas.height);
     //sim.lattice.forEach(p => console.log(p.ux+","+p.uy));
     sim.particles.forEach(p => p.draw(context));
-    console.log("FRAME OVER");
+
 }
+// Aggregate measurements to avoid logging on every animation frame.
+const profile = {
+    reportStart: performance.now(),
+    previousTimestamp: undefined,
+    frames: 0,
+    totals: {},
+    maximums: {},
+    counts: {}
+};
+
+function recordMeasurement(name, value){
+    profile.totals[name] = (profile.totals[name] || 0) + value;
+    profile.maximums[name] = Math.max(profile.maximums[name] || 0, value);
+    profile.counts[name] = (profile.counts[name] || 0) + 1;
+}
+
 function loop(timestamp){
+    const start = performance.now();
     sim.simulation(0.1);
-    draw(context);
+    const afterSimulation = performance.now();
+    draw();
+    const afterDraw = performance.now();
+
+    recordMeasurement("Physics (ms)", afterSimulation - start - sim.metrics.mapMs);
+    recordMeasurement("Map rebuild (ms)", sim.metrics.mapMs);
+    recordMeasurement("Drawing calls (ms)", afterDraw - afterSimulation);
+    recordMeasurement("Neighbor visits per step", sim.metrics.neighborVisits);
+    recordMeasurement("Maximum cell occupancy", sim.metrics.maxCellOccupancy);
+    recordMeasurement("Occupied cells", sim.metrics.occupiedCells);
+    recordMeasurement("Retained map entries", sim.lattice.size);
+    if(profile.previousTimestamp !== undefined){
+        recordMeasurement("Frame interval (ms)", timestamp - profile.previousTimestamp);
+    }
+    profile.previousTimestamp = timestamp;
+    profile.frames++;
+
+    if(afterDraw - profile.reportStart >= 1000){
+        const rows = {};
+        for(const name of Object.keys(profile.totals)){
+            rows[name] = {
+                average: Number((profile.totals[name] / profile.counts[name]).toFixed(3)),
+                maximum: Number(profile.maximums[name].toFixed(3))
+            };
+        }
+        console.log("Fluid profile", {
+            elapsedSeconds: Number((afterDraw / 1000).toFixed(1)),
+            framesPerSecond: Number((profile.frames * 1000 /
+                (afterDraw - profile.reportStart)).toFixed(1))
+        });
+        console.table(rows);
+        profile.reportStart = afterDraw;
+        profile.frames = 0;
+        profile.totals = {};
+        profile.maximums = {};
+        profile.counts = {};
+    }
     window.requestAnimationFrame(loop);
 }
 
