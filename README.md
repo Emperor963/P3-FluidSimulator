@@ -206,8 +206,8 @@ Each animation callback advances one step with $\Delta t=0.1$ and draws the resu
 The current velocity updates contain JavaScript remainder operations,
 
 ```js
-p.ux += (ax + Number(this.g[0])) * delT % 10;
-p.uy += (ay + Number(this.g[1])) * delT % 10;
+p.ux += (ax + Number(this.g[0])) * delT;
+p.uy += (ay + Number(this.g[1])) * delT;
 ```
 
 These wrap each acceleration increment with remainder 10. They can produce discontinuities and do not impose a maximum accumulated speed. They are part of the current implementation and affect the interpretation of its physical behavior.
