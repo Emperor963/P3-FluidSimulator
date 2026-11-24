@@ -272,8 +272,8 @@ class Simulator {
 
             
             //console.log(gradD[0] + "," + gradD[1]);
-            p.ux += (ax + Number(this.g[0]))*delT%10;
-            p.uy += (ay + Number(this.g[1]))*delT%10;
+            p.ux += (ax + Number(this.g[0]))*delT;
+            p.uy += (ay + Number(this.g[1]))*delT;
 
             const minimumDensity = this.restDensity * 0.01;
             const nextDensity = p.d * (1 - divU * delT);
