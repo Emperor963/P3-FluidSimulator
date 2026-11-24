@@ -8,6 +8,16 @@
     <body>
         <header>
             <h1>Lattice-based Smoothed Particle Hydrodynamics Fluid Simulator</h1>
+            <label class="color-switch">
+                <span>Velocity</span>
+                <input id="density-coloring" type="checkbox" role="switch" aria-label="Color by density">
+                <span>Density</span>
+            </label>
+            <label class="color-switch">
+                <span>Particles</span>
+                <input id="field-rendering" type="checkbox" role="switch" aria-label="Use field rendering">
+                <span>Field</span>
+            </label>
         </header>
         <canvas id="canvas"></canvas>
         <script src="experiments.js" type="module" defer></script>

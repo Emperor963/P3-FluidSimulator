@@ -27,7 +27,8 @@ The animation starts automatically. Keep the server running, save edits, and ref
 | --- | --- |
 | `fluids.html` | Page structure and experiment module entry point |
 | `fluids.js` | Exported particle and solver classes, spatial indexing, physics, and solver metrics |
-| `experiments.js` | Parameters, centered initialization, initial vortex, rendering, stirring, animation, and profiling reports |
+| `experiments.js` | Parameters, centered initialization, initial vortex, renderer selection, stirring, animation, and profiling reports |
+| `field-renderer.js` | Reusable sampled density and velocity fields, opacity, and smooth image rendering |
 | `experimental-fluid.js` | Compatibility entry point importing `experiments.js` |
 | `libs/custom.css` | Full-viewport canvas layout with scrolling disabled |
 | `libs/runCanvas.js` | Reusable animation-control helper from the course library, currently unused by this simulator |
@@ -45,21 +46,79 @@ Each `Particle` stores the following quantities.
 
 Canvas coordinates increase to the right and downward, so positive `gy` accelerates particles toward the bottom of the screen. Lengths use pixels and time uses simulation units. Parameters currently form an experimental numerical model without a calibration to SI material properties.
 
-Particles are rendered as circles of radius 3, colored by speed. This visual radius is independent of the interaction radius. Neighbor selection uses particle centers.
+## Rendering and color switches
 
-## Speed-based coloring
+Two switches above the canvas change the display immediately.
 
-`draw()` in `experiments.js` maps the magnitude of velocity to an HSL hue,
+| Switch | Behavior |
+| --- | --- |
+| **Particles / Field** | Draw individual circles or a continuous sampled field |
+| **Velocity / Density** | Color by speed or density |
+
+The initial renderer comes from `experiment.rendering.mode`, currently `"field"`. Velocity coloring is selected initially. Drag stirring works in either renderer.
+
+### Particle rendering
+
+Particle mode draws one circle per particle, with radius set by `rendering.radius`, currently 10 simulation pixels. The radius controls appearance. Neighbor selection uses particle centers and the support radius `h`.
+
+Velocity coloring maps speed to an HSL hue,
 
 $$
-v_i = \sqrt{u_{x,i}^2 + u_{y,i}^2},
+v_i=\sqrt{u_{x,i}^2+u_{y,i}^2},
 \qquad
-H_i = 210\left(1-\min\left(\frac{v_i}{30},1\right)\right).
+H_i=H_0\left(1-\min\left(\frac{v_i}{v_{\mathrm{scale}}},1\right)\right).
 $$
 
-Stationary particles appear blue. Increasing speed moves the color through cyan, green, and yellow toward red. Speeds of 30 or higher share the red endpoint. Coloring helps reveal currents, agitation, and the effect of damping. It represents speed rather than density or pressure.
+Here `slowHue` supplies $H_0=210$ and `speedScale` supplies $v_{\mathrm{scale}}=20$. Stationary particles appear blue. Higher speeds progress through cyan, green, and yellow to red. Speeds at or above 20 share the red endpoint.
 
-Change `experiment.rendering.speedScale` to adjust the speed represented by red. A larger value spreads the transition over a wider speed range. `rendering.radius` sets visual size, `slowHue` sets the low-speed hue, and `saturation` and `lightness` set color intensity and brightness. Current values are 3, 210, 90%, and 60%, respectively.
+Density coloring uses the evolved particle density `p.d`. Its normalized color value is $\min(\max(\rho_i/(\rho_0 S),0),1)$, where $S$ is `densityScale`. With the current value of 1, reference density reaches red. Increasing `densityScale` keeps reference-density regions toward the blue end of the palette. Saturation and lightness are set by the corresponding rendering parameters, currently 90% and 60%.
+
+### Field rendering
+
+`FieldRenderer` builds a low-resolution image from overlapping particle contributions. At each image sample $\mathbf{x}$, it accumulates the compact Poly6 field,
+
+$$
+\rho_{\mathrm{visual}}(\mathbf{x})
+=\sum_i m_i W(\lVert\mathbf{x}-\mathbf{x}_i\rVert,h).
+$$
+
+Each particle updates only samples within its support radius. In velocity-color mode, the renderer also accumulates weighted velocity and divides by local field density,
+
+$$
+\mathbf{u}_{\mathrm{visual}}(\mathbf{x})
+=\frac{\sum_i m_i\mathbf{u}_i W_i}{\rho_{\mathrm{visual}}(\mathbf{x})}.
+$$
+
+The speed of this interpolated vector selects the color. Opposing particle velocities can cancel locally. In density-color mode, the renderer uses $\rho_{\mathrm{visual}}$ relative to reference density. Particle mode displays the evolved `p.d`, while field mode displays density reconstructed from current positions and masses. These two estimates can differ.
+
+Opacity fades toward the free surface. For `opacityDensity` $T$, the normalized opacity input and final alpha are
+
+$$
+z=\min\left(\frac{\rho_{\mathrm{visual}}}{T\rho_0},1\right),
+\qquad
+\alpha=z^2(3-2z).
+$$
+
+The current $T=0.35$ makes samples fully opaque at 35% of reference density. Lowering this setting makes sparse regions more opaque. Raising it makes them more transparent. Samples with zero field density are transparent.
+
+The renderer reuses typed arrays and image storage, caches a 256-color palette, and draws its offscreen image onto the main canvas with image smoothing enabled. The visual field is reconstructed each draw. Its values feed the displayed image only.
+
+### Field quality and cost
+
+Adjust `rendering.fieldSpacing` in `experiments.js` and reload. Smaller values produce finer samples and smoother spatial detail. The current value is 5.
+
+| `fieldSpacing` | Image samples for a 1400 by 680 domain | Relative sample count |
+| --- | --- | --- |
+| 6 | 234 by 114 = 26,676 | About 0.70 times the current count |
+| 5 | 280 by 136 = 38,080 | Current setting |
+| 4 | 350 by 170 = 59,500 | About 1.56 times |
+| 3 | 467 by 227 = 106,009 | About 2.78 times |
+
+Halving the spacing produces approximately four times as many samples and increases particle-to-sample accumulation work. Increasing `N` changes the physical particle sampling and physics cost. Reducing `fieldSpacing` improves image sampling at the existing particle count.
+
+A field can join nearby particle contributions into a smooth surface. Regions outside every particle's support remain empty. Large particle separations still affect the result.
+
+`rendering.radius` applies to particle mode. Field mode uses `h` for contribution support and `opacityDensity` for surface visibility. Both modes share `speedScale`, `densityScale`, `slowHue`, `saturation`, and `lightness`.
 
 ## Interactive stirring
 
@@ -126,11 +185,11 @@ $$
 
 `calculateLocalDerivatives()` uses this final expression directly. The factor of distance cancels analytically, allowing the loop to use squared distances throughout and avoid square roots.
 
-`initializeExperiment()` estimates a reference density $\rho_0$ by summing mass-weighted kernel values over a regular lattice with spacing 10,
+`initializeExperiment()` estimates a reference density $\rho_0$ by summing mass-weighted kernel values over a regular lattice with configured spacing $\Delta$, currently 8,
 
 $$
 \rho_0=m\sum_{a,b\in\mathbb{Z}}
-W\!\left(10\sqrt{a^2+b^2},h\right).
+W\!\left(\Delta\sqrt{a^2+b^2},h\right).
 $$
 
 Only offsets inside kernel support contribute. The sum includes the central contribution. Every particle starts with this same density, including particles at the edges of the initial block. Subsequent density evolution uses velocity divergence rather than repeating this mass sum.
@@ -203,7 +262,7 @@ Each animation callback advances one step with $\Delta t=0.1$ and draws the resu
 3. Advance position using the updated velocity.
 4. Reflect particles at the canvas boundaries.
 5. Rebuild spatial membership and update profiling counters.
-6. Clear the canvas and render the particles.
+6. Clear the canvas and draw the selected particle or field renderer.
 
 Velocity is advanced using the combined pressure, damping, and gravity acceleration,
 
@@ -237,21 +296,29 @@ All adjustable settings are in the exported `experiment` object at the top of `e
 
 | Setting | Current value | Effect |
 | --- | --- | --- |
-| `N` | 7,500 | Exact number of particles to create |
+| `N` | 9,000 | Exact number of particles to create |
 | `columns` | 125 | Maximum particles across each row |
-| `spacing` | 10 | Initial center-to-center distance and reference-density lattice spacing |
+| `spacing` | 8 | Initial center-to-center distance and reference-density lattice spacing |
 | `h` | 20 | Kernel support radius and spatial cell width |
 | `mass` | 0.2 | Mass assigned to each particle |
-| `gravity` | `[0, 0]` | Horizontal and vertical acceleration |
+| `gravity` | `[0, 1]` | Horizontal and vertical acceleration |
 | `speedOfSound` | 20 | Pressure stiffness through its squared value |
 | `viscosity` | 0.1 | Neighbor velocity-damping strength |
 | `timeStep` | 0.1 | Simulation time advanced per animation frame |
 | `densityFloorFraction` | 0.01 | Minimum density as a fraction of reference density |
 | `boundaryMargin` | 10 | Distance between the reflecting walls and canvas edges |
 | `canvas` | `{ width: 1400, height: 680 }` | Simulation coordinate dimensions |
-| `vortex` | `{ sigma: 120, angularSpeed: 0.2 }` | Spread and strength of the initial rotation |
+| `vortex` | `{ sigma: 120, angularSpeed: 0 }` | Spread and strength of the initial rotation |
 | `stirring` | `{ radius: 80, strength: 0.3 }` | Drag interaction size and strength |
-| `rendering` | `{ radius: 3, speedScale: 30, slowHue: 210, saturation: 90, lightness: 60 }` | Particle appearance and speed coloring |
+| `rendering.mode` | `"field"` | Initial renderer, switchable on the page |
+| `rendering.fieldSpacing` | 5 | Approximate distance between field samples |
+| `rendering.opacityDensity` | 0.35 | Reference-density fraction producing full field opacity |
+| `rendering.densityScale` | 1 | Reference-density multiplier reaching the red endpoint |
+| `rendering.radius` | 10 | Particle-mode circle radius |
+| `rendering.speedScale` | 20 | Speed reaching the red endpoint |
+| `rendering.slowHue` | 210 | Blue hue at zero speed or density |
+| `rendering.saturation` | 90 | HSL saturation percentage |
+| `rendering.lightness` | 60 | HSL lightness percentage |
 | `profiling` | `{ enabled: false, reportIntervalMs: 1000 }` | Console report visibility and interval |
 
 ### Centered particle initialization
@@ -262,7 +329,7 @@ $$
 \text{rows}=\left\lceil\frac{N}{\text{columns}}\right\rceil.
 $$
 
-For counts smaller than `columns`, initialization uses only the required columns. The vertical extent is centered in the canvas, and each row is centered horizontally, including a partially filled final row. With the current configuration, 125 columns and 60 rows occupy centers from $x=80$ to $1320$ and $y=45$ to $635$.
+For counts smaller than `columns`, initialization uses only the required columns. The vertical extent is centered in the canvas, and each row is centered horizontally, including a partially filled final row. With the current configuration, 125 columns and 72 rows occupy centers from $x=204$ to $1196$ and $y=56$ to $624$.
 
 Initialization rejects layouts that exceed the available area inside the boundary margins. Reducing `spacing` produces a tighter block and changes the reference density. Increasing it spreads the same particles across a larger area. `N = 0` creates an empty state.
 
@@ -300,7 +367,7 @@ Neighbor counters execute once per candidate visit, potentially hundreds of thou
 | --- | --- |
 | Physics | Simulation duration excluding the measured map rebuild |
 | Map rebuild | Clearing cell arrays, assigning membership, and updating occupancy metrics |
-| Drawing calls | CPU time issuing canvas operations |
+| Drawing calls | CPU time for the selected renderer, including field accumulation and image generation in field mode |
 | Neighbor visits per step | Directed candidate visits before support filtering |
 | Maximum cell occupancy | Largest cell population after a step |
 | Occupied cells | Cells currently containing particles |
@@ -312,6 +379,23 @@ The report also estimates frames per second. Its `elapsedSeconds` value uses the
 Candidate pairs are currently evaluated in both directions. Increasing particle count or concentrating particles into fewer cells increases neighbor work. A rough cost model is $O(N+C+V)$ per step, where $C$ is the number of retained cells and $V$ is the number of directed candidate visits. A highly concentrated population can approach quadratic interaction cost.
 
 A browser Performance recording can further distinguish arithmetic, generator traversal, allocation, garbage collection, and rendering costs.
+
+## Rolling back the field-rendering trial
+
+For an immediate visual comparison, use the **Particles / Field** switch. Set `rendering.mode` to `"particles"` and reload to start in particle mode.
+
+The pre-field source snapshot is in `rollback-field-20261124-100459`. To restore the active files from that snapshot, run these commands from the project directory, then refresh the page.
+
+```powershell
+Copy-Item -LiteralPath .\rollback-field-20261124-100459\experiments.js -Destination .\experiments.js -Force
+Copy-Item -LiteralPath .\rollback-field-20261124-100459\fluids.html -Destination .\fluids.html -Force
+```
+
+These commands overwrite the current experiment settings and HTML with their snapshot versions, including settings changed since the snapshot. The added `field-renderer.js` can remain as an unused file after restoration.
+
+The snapshot also contains `manifest.json` and `Restore.ps1` for restoring all saved project files and removing the added renderer. The local Windows execution policy blocked the unsigned script during verification. The direct copy commands above restore the active entry point and page through ordinary file operations.
+
+A later snapshot in `rollback-render-switch-20261124-100947` contains the field-rendering version immediately before adding the on-page renderer switch.
 
 ## Physical interpretation and limitations
 

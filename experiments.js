@@ -1,4 +1,5 @@
 import { Particle, Simulator } from "./fluids.js";
+import { FieldRenderer } from "./field-renderer.js";
 
 // Edit experiment settings here. Reload the page after editing this object.
 export const experiment = {
@@ -7,7 +8,7 @@ export const experiment = {
     spacing: 8,
     h: 20,
     mass: 0.2,
-    gravity: [0, 0],
+    gravity: [0, 1],
     speedOfSound: 20,
     viscosity: 0.1,
     timeStep: 0.1,
@@ -16,7 +17,7 @@ export const experiment = {
     canvas: { width: 1400, height: 680 },
     vortex: { sigma: 120, angularSpeed: 0.0 },
     stirring: { radius: 80, strength: 0.3 },
-    rendering: { radius: 10, speedScale: 20, slowHue: 210, saturation: 90, lightness: 60 },
+    rendering: { mode: "field", fieldSpacing: 2, opacityDensity: 0.35, densityScale: 1, radius: 10, speedScale: 20, slowHue: 210, saturation: 90, lightness: 60 },
     profiling: { enabled: false, reportIntervalMs: 1000 }
 };
 
@@ -24,7 +25,14 @@ const canvas = document.getElementById("canvas");
 canvas.width = experiment.canvas.width;
 canvas.height = experiment.canvas.height;
 const context = canvas.getContext("2d");
+const densityColoring = document.getElementById("density-coloring");
+const fieldRendering = document.getElementById("field-rendering");
+fieldRendering.checked = experiment.rendering.mode === "field";
+fieldRendering.addEventListener("change", () => {
+    experiment.rendering.mode = fieldRendering.checked ? "field" : "particles";
+});
 const sim = new Simulator(canvas, experiment);
+const fieldRenderer = new FieldRenderer(canvas, experiment.rendering, experiment.h);
 
 function initializeExperiment(){
     const { N, columns, spacing, mass, boundaryMargin, vortex } = experiment;
@@ -145,9 +153,15 @@ canvas.addEventListener("lostpointercapture", stopStirring);
 function draw(){
     
     context.clearRect(0, 0, canvas.width, canvas.height);
+    if (experiment.rendering.mode === "field") {
+        fieldRenderer.draw(sim, densityColoring.checked);
+        return;
+    }
     //sim.lattice.forEach(p => console.log(p.ux+","+p.uy));
     sim.particles.forEach(p => {
-        const fraction = Math.min(Math.hypot(p.ux, p.uy) / experiment.rendering.speedScale, 1);
+        const fraction = densityColoring.checked
+            ? Math.min(Math.max(p.d / sim.restDensity / experiment.rendering.densityScale, 0), 1)
+            : Math.min(Math.hypot(p.ux, p.uy) / experiment.rendering.speedScale, 1);
         const hue = experiment.rendering.slowHue * (1 - fraction);
         context.fillStyle = `hsl(${hue}, ${experiment.rendering.saturation}%, ${experiment.rendering.lightness}%)`;
         context.beginPath();
