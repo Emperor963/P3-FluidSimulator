@@ -1,7 +1,8 @@
 # P3-FluidSimulator
 
-<img width="426" height="240" alt="Video Project 2" src="https://github.com/user-attachments/assets/b49b884e-3796-4d89-99d1-abf0fccb11be" />
 
+
+https://github.com/user-attachments/assets/5d7c7ec4-d15e-4154-9888-68b46290bd40
 
 
 A browser-based 2D fluid simulation experiment, originally created as an extra project for CS 559 at the University of Wisconsin–Madison. JavaScript advances moving particles and renders them through the Canvas 2D API.
