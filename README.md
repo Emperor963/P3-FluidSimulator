@@ -65,12 +65,10 @@ A fixed nine-cell stencil bounds the number of map lookups per particle. The num
 The active interaction uses a compactly supported, two-dimensional Poly6 kernel,
 
 $$
-W(r,h)=
-\begin{cases}
-\dfrac{4}{\pi h^8}(h^2-r^2)^3, & 0\le r<h,\\
-0, & r\ge h.
-\end{cases}
+W(r,h)=\frac{4}{\pi h^8}(h^2-r^2)^3
 $$
+
+This expression applies for $0 \le r < h$. For $r \ge h$, the kernel is zero.
 
 Its radial derivative inside support is
 
